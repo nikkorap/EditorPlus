@@ -15,6 +15,7 @@ using UnityEngine.UI;
 using System.Collections;
 using NuclearOption.SavedMission;
 using NuclearOption.MissionEditorScripts.Buttons;
+using HarmonyLib;
 
 namespace EditorPlus
 {
@@ -44,6 +45,8 @@ namespace EditorPlus
         {
             Logger = base.Logger;
             _modPath = Path.GetDirectoryName(Info.Location);
+            Harmony harmony = new(MyPluginInfo.PLUGIN_GUID);
+            harmony.PatchAll();
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneManager.sceneUnloaded += OnSceneUnloaded;
         }
@@ -646,6 +649,17 @@ namespace EditorPlus
 
             Logger.LogDebug($"[Graph] Rebuild done: objectives={objectives.Length}, outcomes={outcomes.Length}, links={links.Count}");
 
+        }
+
+        [HarmonyPatch]
+        internal static class EditorHandle_ClampY_Patch
+        {
+            static MethodBase TargetMethod() => AccessTools.DeclaredMethod(typeof(EditorHandle), "ClampY", [typeof(Unit), typeof(GlobalPosition)]);
+            static bool Prefix(Unit unit, GlobalPosition position, ref GlobalPosition __result)
+            {
+                __result = position;
+                return false;
+            }
         }
 
         private static IEnumerable<Objective> ReflectObjectives(Outcome outc)

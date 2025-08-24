@@ -8,8 +8,10 @@ If you encounter any bugs then please report them.
 I have many ideas on what to add in the future, but any requests are welcome.
 Feedback is appreciated, especially on how to improve the visual design 
 
+<img width="960" height="540" alt="image" src="https://github.com/user-attachments/assets/6489d11f-7bdb-4868-85cf-6edbeec75d87" />
 
-# How to install BepInEx (5 mono) guide [https://docs.bepinex.dev/articles/user_guide/installation/index.html]
+
+## How to install BepInEx (5 mono) guide [https://docs.bepinex.dev/articles/user_guide/installation/index.html]
 
 TLDR:
 1. Download the correct version of BepInEx (bepinex 5 mono) [https://github.com/BepInEx/BepInEx]
@@ -27,11 +29,6 @@ TLDR:
 
 
 ## How to install mods for BepInEx?
-- For your first mod download this mod: [Mod Configuration manager][https://github.com/BepInEx/BepInEx.ConfigurationManager]
-- This is an awesome plugin that gives you an ingame mod menu to control mods (i try to add support for it in my mods) [TOGGLE WITH F1]
 
-  ![ModMenuDemo](https://github.com/user-attachments/assets/6ee561c4-f2ac-4798-9896-a3dc8bca9714)
-  
-- in the downloaded zip file there is a BepInEx folder, you can drop it right in the install folder.
-- Some other mods might be just .dll files, drop those in [Nuclear Option\BepInEx\plugins\ (optional folder)]
-
+- in the downloaded zip file there is a folder, place it in [Nuclear Option\BepInEx\plugins\ (optional folder)]
+- the mod .dll and .nobp file must be together in the same folder, they can be placed under any subfolder of plugins

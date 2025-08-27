@@ -1,4 +1,19 @@
 ﻿// Plugin.cs
+
+/*
+TODO
+
+height clamp broke terrain snapping FIXED
+keybind to place multiple units     DONE
+lines to airbases and waypoints     DONE
+extend dropdowns                    DONE
+toggle to place unit with hold position DONE
+shrink MissionNameInput if more buttons are needed DONE
+
+add snapping                        DONEish, not snapping cursor ghost
+custom button icons
+
+*/
 using BepInEx;
 using BepInEx.Logging;
 using NuclearOption.MissionEditorScripts;
@@ -16,6 +31,10 @@ using System.Collections;
 using NuclearOption.SavedMission;
 using NuclearOption.MissionEditorScripts.Buttons;
 using HarmonyLib;
+using TMPro;
+using RuntimeHandle;
+using System.Globalization;
+using NuclearOption.SavedMission.ObjectiveV2.Objectives;
 
 namespace EditorPlus
 {
@@ -29,20 +48,23 @@ namespace EditorPlus
         private GraphView _view;
         private static MethodInfo _miShowEditOutcome;
         private Coroutine _sceneSetupCo;
-        private static readonly Dictionary<Type, FieldInfo> _completeObjListField = new();
+        private static readonly Dictionary<Type, FieldInfo> _completeObjListField = [];
         private Button _overlayToggleButton;
         private Button _gridToggleButton;
-        private static readonly Dictionary<Type, FieldInfo> s_AllItemsFieldCache = new();
-        private static readonly Dictionary<Type, MemberInfo[]> s_UnitsMembersCache = new();
+        private Toggle _holdPosToggle;
+        private bool holdpos = false;
+        private static readonly Dictionary<Type, FieldInfo> s_AllItemsFieldCache = [];
         private ObjectiveEditorV2 editormenu;
         private ChangeTabButton objectivesBtn;
         private RectTransform _leftPanelRT;
         private Vector2 _leftPanelOriginalAnchored;
         private bool _leftPanelOffsetApplied;
         private const float LeftPanelShiftX = -530f;
-
+        internal static Plugin Instance;
+        private bool _nameInputShrunk;
         void Awake()
         {
+            Instance = this;
             Logger = base.Logger;
             _modPath = Path.GetDirectoryName(Info.Location);
             Harmony harmony = new(MyPluginInfo.PLUGIN_GUID);
@@ -100,10 +122,11 @@ namespace EditorPlus
 
             _overlayToggleButton = null;
             _gridToggleButton = null;
-            objectivesBtn = null;     
+            _holdPosToggle = null;
+            objectivesBtn = null;
             editormenu = null;
             _view = null;
-
+            _nameInputShrunk = false;
             if (_overlayRoot)
             {
                 Destroy(_overlayRoot);
@@ -114,7 +137,7 @@ namespace EditorPlus
         private static List<Objective> GetCompleteList(Outcome outc, bool createIfMissing = false)
         {
 
-            var t = outc.GetType();
+            Type t = outc.GetType();
             if (!_completeObjListField.TryGetValue(t, out var fi))
             {
                 const BindingFlags BF = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
@@ -122,10 +145,10 @@ namespace EditorPlus
                 _completeObjListField[t] = fi;
             }
 
-            var list = (List<Objective>)_completeObjListField[t]?.GetValue(outc);
+            List<Objective> list = (List<Objective>)_completeObjListField[t]?.GetValue(outc);
             if (list == null && createIfMissing && _completeObjListField[t] != null)
             {
-                list = new List<Objective>();
+                list = [];
                 _completeObjListField[t].SetValue(outc, list);
             }
             return list;
@@ -134,23 +157,24 @@ namespace EditorPlus
         {
             if (!IsInMissionEditor()) return false;
 
-            if (_overlayToggleButton && _gridToggleButton) return true;
+            if (_overlayToggleButton && _gridToggleButton && _holdPosToggle) return true;
 
-            objectivesBtn = FindObjectsOfType<ChangeTabButton>(true).FirstOrDefault(b => b && string.Equals(b.name, "ObjectivesButton", StringComparison.OrdinalIgnoreCase));
+            objectivesBtn = FindObjectsOfType<ChangeTabButton>(true)
+                .FirstOrDefault(b => b && string.Equals(b.name, "ObjectivesButton", StringComparison.OrdinalIgnoreCase));
             if (!objectivesBtn) return false;
 
-            var template = objectivesBtn.GetComponent<Button>();
+            Button template = objectivesBtn.GetComponent<Button>();
             if (!template) return false;
 
-            var parent = template.transform?.parent;
+            Transform parent = template.transform?.parent;
             if (!parent) return false;
-
+            ShrinkTopbarFirstSibling(parent, 0.7f);
             _overlayToggleButton ??= EnsureToolbarButton(
                 parent, template, "EditorPlusToggleButton", "Graph",
                 () =>
                 {
                     if (!IsInMissionEditor() || !EnsureOverlayLoaded()) return;
-                    var show = !_overlayRoot.activeSelf;
+                    bool show = !_overlayRoot.activeSelf;
                     if (!show && _view) _view.ClearUnitGhosts();
                     _overlayRoot.SetActive(show);
                     ApplyLeftPanelOffset(show);
@@ -165,8 +189,62 @@ namespace EditorPlus
                     _view?.ToggleBackgroundAndGrid();
                 });
 
-            return _overlayToggleButton && _gridToggleButton;
+            Toggle autoSaveTemplate = parent.GetComponentsInChildren<Toggle>(true)
+                .FirstOrDefault(t => t && string.Equals(t.name, "AutoSaveToggle", StringComparison.OrdinalIgnoreCase));
+            _holdPosToggle ??= EnsureToolbarToggle(
+                parent,
+                autoSaveTemplate,
+                "HoldPosToggle",
+                "Hold Pos",
+                Instance.holdpos,
+                v =>
+                {
+                    Instance.holdpos = v;
+                });
+
+            return _overlayToggleButton && _gridToggleButton && _holdPosToggle;
         }
+        private static Toggle EnsureToolbarToggle(
+            Transform parent,
+            Toggle template,
+            string goName,
+            string hoverText,
+            bool initialValue,
+            Action<bool> onValueChanged)
+        {
+            if (!template) return null;
+
+            Transform existingTf = parent.Find(goName);
+            GameObject go = existingTf ? existingTf.gameObject : Instantiate(template.gameObject, parent);
+            go.name = goName;
+            go.SetActive(true);
+
+            Toggle t = go.GetComponent<Toggle>();
+            if (!t) t = go.AddComponent<Toggle>();
+
+            t.onValueChanged.RemoveAllListeners();
+            t.SetIsOnWithoutNotify(initialValue);
+            t.onValueChanged.AddListener(v => onValueChanged?.Invoke(v));
+            t.interactable = true;
+
+            ShowHoverText hover = go.GetComponentInChildren<ShowHoverText>(true);
+            if (hover) hover.SetText(hoverText);
+            TMP_Text label = go.GetComponentInChildren<TMP_Text>(true);
+            if (label) label.text = hoverText;
+
+            go.transform.SetAsLastSibling();
+            return t;
+        }
+
+        private void ShrinkTopbarFirstSibling(Transform parent, float factor = 0.7f)
+        {
+            if (_nameInputShrunk) return;
+            if (parent?.Find("MissionNameInput") is not RectTransform rt) return;
+
+            rt.offsetMax = new(rt.offsetMax.x * factor, rt.offsetMax.y);
+            _nameInputShrunk = true;
+        }
+
         private void ApplyLeftPanelOffset(bool on)
         {
             if (!_leftPanelRT)
@@ -175,7 +253,7 @@ namespace EditorPlus
 
                 if (!_leftPanelRT)
                 {
-                    var editor = editormenu ? editormenu : FindObjectOfType<ObjectiveEditorV2>(true);
+                    ObjectiveEditorV2 editor = editormenu ? editormenu : FindObjectOfType<ObjectiveEditorV2>(true);
                     if (editor)
                         _leftPanelRT = editor.GetComponentsInParent<RectTransform>(true)
                             .FirstOrDefault(rt => string.Equals(rt.name, "LeftPanel", StringComparison.OrdinalIgnoreCase));
@@ -188,7 +266,7 @@ namespace EditorPlus
 
             if (on)
             {
-                if (_leftPanelOffsetApplied) return; 
+                if (_leftPanelOffsetApplied) return;
                 _leftPanelRT.anchoredPosition = _leftPanelOriginalAnchored + new Vector2(LeftPanelShiftX, 0f);
                 _leftPanelOffsetApplied = true;
             }
@@ -207,15 +285,15 @@ namespace EditorPlus
             string hoverText,
             Action onClick)
         {
-            var existingTf = parent.Find(goName);
-            var go = existingTf ? existingTf.gameObject : Instantiate(template.gameObject, parent);
+            Transform existingTf = parent.Find(goName);
+            GameObject go = existingTf ? existingTf.gameObject : Instantiate(template.gameObject, parent);
             go.name = goName;
 
-            var btn = go.GetComponent<Button>();
+            Button btn = go.GetComponent<Button>();
             btn.onClick.RemoveAllListeners();
             btn.onClick.AddListener(() => onClick?.Invoke());
 
-            var label = go.GetComponentInChildren<ShowHoverText>(true);
+            ShowHoverText label = go.GetComponentInChildren<ShowHoverText>(true);
             if (label) label.SetText(hoverText);
 
             go.transform.SetAsLastSibling();
@@ -224,57 +302,113 @@ namespace EditorPlus
 
         private static IEnumerable<Func<Vector3>> EnumerateUnitWorldGetters(string uniqueId, bool isObjective)
         {
-            var mo = MissionManager.Objectives;
+            MissionObjectives mo = MissionManager.Objectives;
             if (mo == null) yield break;
 
             if (isObjective)
             {
-                var obj = mo.AllObjectives.FirstOrDefault(o => o.SavedObjective.UniqueName == uniqueId);
+                Objective obj = mo.AllObjectives.FirstOrDefault(o => o.SavedObjective.UniqueName == uniqueId);
                 if (obj == null) yield break;
 
-                var fi = FindFieldRecursive(obj.GetType(), "allItems");
+                FieldInfo fi = FindFieldRecursive(obj.GetType(), "allItems");
                 if (fi != null && fi.GetValue(obj) is IEnumerable items)
                 {
-                    foreach (var it in items)
+                    foreach (object it in items)
                     {
                         if (it is SavedUnit su && su != null)
                         {
-                            var suLocal = su;
+                            SavedUnit suLocal = su;
                             yield return () => suLocal.globalPosition.AsVector3() + Datum.originPosition;
+                            continue;
+                        }
+
+                        if (it is SavedAirbase ab && ab != null)
+                        {
+                            SavedAirbase abLocal = ab;
+                            yield return () => abLocal.Center.AsVector3() + Datum.originPosition;
+                            continue;
+                        }
+
+                        if (it is Waypoint wp && wp != null)
+                        {
+                            Waypoint wpLocal = wp;
+                            yield return () => wpLocal.GlobalPosition.Value.AsVector3() + Datum.originPosition;
+                            continue;
                         }
                     }
                 }
+
                 yield break;
             }
 
             var ow = mo.AllOutcomes.FirstOrDefault(oc => oc.SavedOutcome.UniqueName == uniqueId);
             if (ow == null) yield break;
 
-            foreach (var su in EnumerateSavedUnitsFromObject(ow))
+            foreach (var su in EnumerateFromObject<SavedUnit>(ow))
             {
-                var suLocal = su;
-                yield return () => suLocal != null
-                    ? suLocal.globalPosition.AsVector3() + Datum.originPosition
-                    : new Vector3(float.NaN, float.NaN, float.NaN);
+                var local = su;
+                yield return () => local.globalPosition.AsVector3() + Datum.originPosition;
             }
 
             var saved = GetPropOrFieldValue(ow, "SavedOutcome");
-            if (saved != null)
+            foreach (var su in EnumerateFromObject<SavedUnit>(saved))
             {
-                foreach (var su in EnumerateSavedUnitsFromObject(saved))
+                var local = su;
+                yield return () => local.globalPosition.AsVector3() + Datum.originPosition;
+            }
+
+        }
+        static readonly Dictionary<(Type, Type), MemberInfo[]> s_EnumerableMembersCache = [];
+
+        static IEnumerable<T> EnumerateFromObject<T>(object src)
+        {
+            if (src == null) yield break;
+
+            var t = src.GetType();
+            if (!s_EnumerableMembersCache.TryGetValue((t, typeof(T)), out var members))
+            {
+                const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var list = new List<MemberInfo>();
+
+                foreach (var f in t.GetFields(F))
+                    if (IsEnumerableOf<T>(f.FieldType)) list.Add(f);
+
+                foreach (var p in t.GetProperties(F))
+                    if (p.CanRead && p.GetIndexParameters().Length == 0 && IsEnumerableOf<T>(p.PropertyType)) list.Add(p);
+
+                members = list.ToArray();
+                s_EnumerableMembersCache[(t, typeof(T))] = members;
+            }
+
+            foreach (var m in members)
+            {
+                object v = m is FieldInfo f ? f.GetValue(src)
+                           : m is PropertyInfo p ? p.GetValue(src, null)
+                           : null;
+
+                if (v == null) continue;
+
+                if (v is IEnumerable<T> typed) { foreach (var e in typed) if (e != null) yield return e; }
+                else if (v is IEnumerable any) { foreach (var e in any) if (e is T te) yield return te; }
+            }
+
+            static bool IsEnumerableOf<TElem>(Type ft)
+            {
+                if (typeof(IEnumerable<TElem>).IsAssignableFrom(ft)) return true;
+                if (!typeof(IEnumerable).IsAssignableFrom(ft)) return false;
+                if (ft.IsGenericType)
                 {
-                    var suLocal = su;
-                    yield return () => suLocal != null
-                        ? suLocal.globalPosition.AsVector3() + Datum.originPosition
-                        : new Vector3(float.NaN, float.NaN, float.NaN);
+                    var ga = ft.GetGenericArguments();
+                    if (ga.Length == 1 && typeof(TElem).IsAssignableFrom(ga[0])) return true;
                 }
+                return false;
             }
         }
 
         private static FieldInfo FindFieldRecursive(Type t, string name)
         {
             if (t == null) return null;
-            if (!s_AllItemsFieldCache.TryGetValue(t, out var fi))
+            if (!s_AllItemsFieldCache.TryGetValue(t, out FieldInfo fi))
             {
                 fi = t.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
                      ?? FindFieldRecursive(t.BaseType, name);
@@ -286,63 +420,16 @@ namespace EditorPlus
         private static object GetPropOrFieldValue(object obj, string name)
         {
             if (obj == null) return null;
-            var t = obj.GetType();
+            Type t = obj.GetType();
             const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             return t.GetProperty(name, F)?.GetValue(obj, null) ?? t.GetField(name, F)?.GetValue(obj);
-        }
-
-        private static IEnumerable<SavedUnit> EnumerateSavedUnitsFromObject(object src)
-        {
-            if (src == null) yield break;
-
-            var t = src.GetType();
-            if (!s_UnitsMembersCache.TryGetValue(t, out var members))
-            {
-                const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                var list = new List<MemberInfo>();
-                list.AddRange(t.GetFields(F).Where(IsSavedUnitEnumerableField));
-                list.AddRange(t.GetProperties(F).Where(p => p.CanRead && p.GetIndexParameters().Length == 0 && IsSavedUnitEnumerableProperty(p)));
-                members = list.ToArray();
-                s_UnitsMembersCache[t] = members;
-            }
-
-            foreach (var m in members)
-            {
-                object value = m is FieldInfo f ? f.GetValue(src)
-                                : m is PropertyInfo p ? p.GetValue(src, null)
-                                : null;
-                if (value == null) continue;
-
-                if (value is IEnumerable<SavedUnit> typed)
-                {
-                    foreach (var su in typed) if (su != null) yield return su;
-                    continue;
-                }
-                if (value is IEnumerable any)
-                    foreach (var it in any) if (it is SavedUnit su && su != null) yield return su;
-            }
-
-            static bool IsSavedUnitEnumerableField(FieldInfo f) => IsSavedUnitEnumerableType(f.FieldType);
-            static bool IsSavedUnitEnumerableProperty(PropertyInfo p) => IsSavedUnitEnumerableType(p.PropertyType);
-            static bool IsSavedUnitEnumerableType(Type ft)
-            {
-                if (typeof(IEnumerable<SavedUnit>).IsAssignableFrom(ft)) return true;
-                if (!typeof(IEnumerable).IsAssignableFrom(ft)) return false;
-                if (ft.IsGenericType)
-                {
-                    var ga = ft.GetGenericArguments();
-                    if (ga.Length == 1 && typeof(SavedUnit).IsAssignableFrom(ga[0])) return true;
-                }
-                return false;
-            }
         }
 
         private bool EnsureOverlayLoaded()
         {
             if (_overlayRoot) return true;
 
-            string path = Directory.EnumerateFiles(_modPath, "*.noep", SearchOption.TopDirectoryOnly)
-                                   .FirstOrDefault();
+            string path = Directory.EnumerateFiles(_modPath, "*.noep", SearchOption.TopDirectoryOnly).FirstOrDefault();
 
             if (string.IsNullOrEmpty(path))
             {
@@ -523,7 +610,7 @@ namespace EditorPlus
             int idx = mo.AllOutcomes.FindIndex(oc => oc.SavedOutcome.UniqueName == uniqueName);
             if (idx < 0) yield break;
 
-            _miShowEditOutcome ??= typeof(ObjectiveEditorV2) .GetMethod("ShowEditOutcome", BindingFlags.Instance | BindingFlags.NonPublic);
+            _miShowEditOutcome ??= typeof(ObjectiveEditorV2).GetMethod("ShowEditOutcome", BindingFlags.Instance | BindingFlags.NonPublic);
             if (_miShowEditOutcome == null) yield break;
             _miShowEditOutcome?.Invoke(editormenu, [idx]);
         }
@@ -548,6 +635,7 @@ namespace EditorPlus
 
             return false;
         }
+
         private static bool RemoveObjectiveReferenceFromOutcome(Outcome outc, Objective obj)
         {
             if (outc is StartObjectiveOutcome so)
@@ -561,6 +649,7 @@ namespace EditorPlus
 
             return false;
         }
+
         private static bool TryFindHostCanvas(out Canvas host)
         {
             host = null;
@@ -620,23 +709,23 @@ namespace EditorPlus
                 Row = 0
             }).ToArray();
 
-            var links = new List<GraphView.LinkDTO>();
-            foreach (var o in mo.AllObjectives)
+            List<GraphView.LinkDTO> links = [];
+            foreach (Objective o in mo.AllObjectives)
             {
-                var oid = o.SavedObjective.UniqueName;
+                string oid = o.SavedObjective.UniqueName;
                 foreach (var oc in o.Outcomes)
                     links.Add(new GraphView.LinkDTO { FromId = oid, FromIsObjective = true, ToId = oc.SavedOutcome.UniqueName, ToIsObjective = false });
             }
-            foreach (var oc in mo.AllOutcomes)
+            foreach (Outcome oc in mo.AllOutcomes)
             {
-                var uid = oc.SavedOutcome.UniqueName;
-                foreach (var nextObj in ReflectObjectives(oc))
+                string uid = oc.SavedOutcome.UniqueName;
+                foreach (Objective nextObj in ReflectObjectives(oc))
                     links.Add(new GraphView.LinkDTO { FromId = uid, FromIsObjective = false, ToId = nextObj.SavedObjective.UniqueName, ToIsObjective = true });
             }
 
             _view.CanOutcomeHaveOutputs = (outcomeId) =>
             {
-                var oc = mo.AllOutcomes.FirstOrDefault(x => x.SavedOutcome.UniqueName == outcomeId);
+                Outcome oc = mo.AllOutcomes.FirstOrDefault(x => x.SavedOutcome.UniqueName == outcomeId);
                 return OutcomeTypeSupportsOutputs(oc);
             };
 
@@ -644,33 +733,163 @@ namespace EditorPlus
             {
                 Objectives = objectives,
                 Outcomes = outcomes,
-                Links = links.ToArray()
+                Links = [.. links]
             }, computeLayout: true, snapshotAsFull: true);
 
             Logger.LogDebug($"[Graph] Rebuild done: objectives={objectives.Length}, outcomes={outcomes.Length}, links={links.Count}");
-
-        }
-
-        [HarmonyPatch]
-        internal static class EditorHandle_ClampY_Patch
-        {
-            static MethodBase TargetMethod() => AccessTools.DeclaredMethod(typeof(EditorHandle), "ClampY", [typeof(Unit), typeof(GlobalPosition)]);
-            static bool Prefix(Unit unit, GlobalPosition position, ref GlobalPosition __result)
-            {
-                __result = position;
-                return false;
-            }
         }
 
         private static IEnumerable<Objective> ReflectObjectives(Outcome outc)
         {
             if (outc is StartObjectiveOutcome so)
-                return (IEnumerable<Objective>)(so.objectivesToStart ?? (IEnumerable<Objective>)Array.Empty<Objective>());
+                return so.objectivesToStart ?? (IEnumerable<Objective>)[];
 
             if (outc.SavedOutcome.Type == OutcomeType.StopOrCompleteObjective)
-                return (IEnumerable<Objective>)(GetCompleteList(outc) ?? (IEnumerable<Objective>)Array.Empty<Objective>());
+                return GetCompleteList(outc) ?? (IEnumerable<Objective>)[];
 
-            return Array.Empty<Objective>();
+            return [];
+        }
+
+        [HarmonyPatch(typeof(MissionEditor), nameof(MissionEditor.RegisterNewUnit), [typeof(Unit), typeof(string)])]
+        internal static class MissionEditor_RegisterNewUnit_Patch
+        {
+            static void Postfix(ref SavedUnit __result)
+            {
+                if (__result is SavedVehicle v)
+                {
+                    v.holdPosition = Instance.holdpos;
+                }
+                if (__result is SavedShip s)
+                {
+                    s.holdPosition = Instance.holdpos;
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(EditorHandle), "ClampY", [typeof(Unit), typeof(GlobalPosition)])]
+        internal static class EditorHandle_ClampY_Patch
+        {
+            static void Prefix(GlobalPosition position, out float __state) => __state = position.y;
+            static void Postfix(ref GlobalPosition __result, float __state) => __result.y = Mathf.Max(__state, __result.y);
+
+        }
+
+        [HarmonyPatch(typeof(UnitMenu), "PlaceUnit", [])]
+        static class UnitMenu_PlaceUnit_Patch
+        {
+            static readonly MethodInfo mi = AccessTools.Method(typeof(UnitMenu), "StartPlaceUnit", Type.EmptyTypes);
+
+            static void Postfix(UnitMenu __instance)
+            {
+                if (Input.GetKey(KeyCode.LeftControl))
+                    HarmonyCoroutineRunner.Instance.StartCoroutine(CallAtEndOfFrame(__instance));
+            }
+
+            static IEnumerator CallAtEndOfFrame(UnitMenu instance)
+            {
+                yield return new WaitForEndOfFrame();
+                mi.Invoke(instance, null);
+            }
+        }
+
+        public class HarmonyCoroutineRunner : MonoBehaviour
+        {
+            static HarmonyCoroutineRunner _instance;
+            public static HarmonyCoroutineRunner Instance
+            {
+                get
+                {
+                    if (_instance == null)
+                    {
+                        var go = new GameObject("HarmonyCoroutineRunner");
+                        DontDestroyOnLoad(go);
+                        _instance = go.AddComponent<HarmonyCoroutineRunner>();
+                    }
+                    return _instance;
+                }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(Vector3DataField), "Setup", [typeof(string), typeof(IValueWrapper<Vector3>)])]
+    static class Snap_Patch
+    {
+        static void Postfix(Vector3DataField __instance, string label)
+        {
+            bool isPos = string.Equals(label, "Position", StringComparison.OrdinalIgnoreCase);
+            if (!(isPos || string.Equals(label, "Rotation", StringComparison.OrdinalIgnoreCase))) return;
+
+
+            TMP_InputField anyInput = __instance.GetComponentInChildren<TMP_InputField>();
+            if (!anyInput) return;
+
+            RectTransform row = anyInput.transform.parent as RectTransform;
+            if (!row) return;
+
+            string name = isPos ? "SnapInput_Pos" : "SnapInput_Rot";
+            _ = row.Find(name)?.GetComponent<TMP_InputField>() ?? CloneSnap(anyInput, row, name, isPos);
+
+            HorizontalLayoutGroup hlg = row.GetComponent<HorizontalLayoutGroup>();
+            if (hlg)
+            {
+                hlg.childControlWidth = true;
+                hlg.childForceExpandWidth = true;
+            }
+        }
+
+        static RuntimeTransformHandle _cachedHandle;
+        static RuntimeTransformHandle GetHandle() =>
+            _cachedHandle ? _cachedHandle : (_cachedHandle = UnityEngine.Object.FindObjectOfType<RuntimeTransformHandle>());
+
+
+        static TMP_InputField CloneSnap(TMP_InputField template, Transform parent, string name, bool isPos)
+        {
+            GameObject go = UnityEngine.Object.Instantiate(template.gameObject, parent);
+            go.name = name;
+
+            TMP_InputField snap = go.GetComponent<TMP_InputField>();
+            if (!snap) return null;
+
+            snap.onEndEdit.RemoveAllListeners();
+            snap.contentType = TMP_InputField.ContentType.DecimalNumber;
+
+            LayoutElement le = snap.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+            le.minWidth = 55f;
+
+            RuntimeTransformHandle h = GetHandle();
+
+            float value = h ? (isPos ? h.positionSnap.x : h.rotationSnap) : 0f;
+            snap.SetTextWithoutNotify(value.ToString(CultureInfo.InvariantCulture));
+
+            snap.onEndEdit.AddListener(v =>
+            {
+                if (!float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out float val)) return;
+                val = Mathf.Max(0f, val);
+
+                RuntimeTransformHandle handle = GetHandle();
+                if (!handle) return;
+
+                if (isPos) handle.positionSnap = new Vector3(val, val, val);
+                else handle.rotationSnap = val;
+            });
+
+            return snap;
+        }
+    }
+
+    [HarmonyPatch(typeof(Dropdown), "Show")]
+    static class Dropdown_Patch
+    {
+        static readonly FieldInfo F_List = AccessTools.Field(typeof(Dropdown), "m_Dropdown");
+
+        static void Postfix(Dropdown __instance)
+        {
+            if (F_List?.GetValue(__instance) is not GameObject listGo) return;
+            if (listGo.TryGetComponent(out RectTransform listRt))
+            {
+                int count = Mathf.Max(1, __instance.options?.Count ?? 0);
+                listRt.sizeDelta = new(listRt.sizeDelta.x, count * 20 + 8);
+            }
         }
     }
 }

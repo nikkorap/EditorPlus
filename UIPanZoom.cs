@@ -1,4 +1,4 @@
-// UIPanZoomMouseOnly.cs
+// UIPanZoom.cs
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -7,7 +7,7 @@ namespace EditorPlus
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(RectTransform))]
-    public class UIPanZoomMouseOnly : MonoBehaviour,
+    public class UIPanZoom : MonoBehaviour,
         IScrollHandler, IPointerDownHandler, IDragHandler, IPointerUpHandler
     {
         [Header("Refs")]
@@ -39,7 +39,6 @@ namespace EditorPlus
             EnsureViewportRaycastable();
             if (minScale > maxScale) maxScale = minScale;
         }
-
 
         public void OnScroll(PointerEventData eventData)
         {
@@ -81,8 +80,6 @@ namespace EditorPlus
             _panPointerId = int.MinValue;
             eventData.Use();
         }
-
-
         private void AutoWireIfNull()
         {
             if (viewport == null) viewport = transform as RectTransform;

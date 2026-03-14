@@ -1,4 +1,5 @@
 # EditorPlus (OUTDATED)
+Check out the updated version by Endar: https://github.com/Endar728/EditorPlus-Endar728
 
 A bepinex mod to enhance the Nuclear Option mission editor experience.
 
